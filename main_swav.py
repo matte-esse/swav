@@ -17,10 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
-import torch.distributed as dist
+# import torch.distributed as dist
 import torch.optim
-import apex
-from apex.parallel.LARC import LARC
+# import apex
+# from apex.parallel.LARC import LARC
 
 from src.utils import (
     bool_flag,
@@ -28,7 +28,7 @@ from src.utils import (
     restart_from_checkpoint,
     fix_random_seeds,
     AverageMeter,
-    init_distributed_mode,
+    # init_distributed_mode,
 )
 from src.multicropdataset import MultiCropDataset
 import src.resnet50 as resnet_models
@@ -123,7 +123,7 @@ parser.add_argument("--seed", type=int, default=31, help="seed")
 def main():
     global args
     args = parser.parse_args()
-    init_distributed_mode(args)
+    # init_distributed_mode(args)
     fix_random_seeds(args.seed)
     logger, training_stats = initialize_exp(args, "epoch", "loss")
 
@@ -135,10 +135,10 @@ def main():
         args.min_scale_crops,
         args.max_scale_crops,
     )
-    sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    # sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        sampler=sampler,
+        # sampler=sampler,
         batch_size=args.batch_size,
         num_workers=args.workers,
         pin_memory=True,
@@ -156,11 +156,11 @@ def main():
     # synchronize batch norm layers
     if args.sync_bn == "pytorch":
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    elif args.sync_bn == "apex":
-        # with apex syncbn we sync bn per group because it speeds up computation
-        # compared to global syncbn
-        process_group = apex.parallel.create_syncbn_process_group(args.syncbn_process_group_size)
-        model = apex.parallel.convert_syncbn_model(model, process_group=process_group)
+    # elif args.sync_bn == "apex":
+    #     # with apex syncbn we sync bn per group because it speeds up computation
+    #     # compared to global syncbn
+    #     process_group = apex.parallel.create_syncbn_process_group(args.syncbn_process_group_size)
+    #     model = apex.parallel.convert_syncbn_model(model, process_group=process_group)
     # copy model to GPU
     model = model.cuda()
     if args.rank == 0:
@@ -174,7 +174,7 @@ def main():
         momentum=0.9,
         weight_decay=args.wd,
     )
-    optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
+    # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
     warmup_lr_schedule = np.linspace(args.start_warmup, args.base_lr, len(train_loader) * args.warmup_epochs)
     iters = np.arange(len(train_loader) * (args.epochs - args.warmup_epochs))
     cosine_lr_schedule = np.array([args.final_lr + 0.5 * (args.base_lr - args.final_lr) * (1 + \
@@ -183,15 +183,15 @@ def main():
     logger.info("Building optimizer done.")
 
     # init mixed precision
-    if args.use_fp16:
-        model, optimizer = apex.amp.initialize(model, optimizer, opt_level="O1")
-        logger.info("Initializing mixed precision done.")
+    # if args.use_fp16:
+    #     model, optimizer = apex.amp.initialize(model, optimizer, opt_level="O1")
+    #     logger.info("Initializing mixed precision done.")
 
     # wrap model
-    model = nn.parallel.DistributedDataParallel(
-        model,
-        device_ids=[args.gpu_to_work_on]
-    )
+    # model = nn.parallel.DistributedDataParallel(
+    #     model,
+    #     device_ids=[args.gpu_to_work_on]
+    # )
 
     # optionally resume from a checkpoint
     to_restore = {"epoch": 0}
@@ -200,7 +200,7 @@ def main():
         run_variables=to_restore,
         state_dict=model,
         optimizer=optimizer,
-        amp=apex.amp,
+        # amp=apex.amp,
     )
     start_epoch = to_restore["epoch"]
 
@@ -220,7 +220,7 @@ def main():
         logger.info("============ Starting epoch %i ... ============" % epoch)
 
         # set sampler
-        train_loader.sampler.set_epoch(epoch)
+        # train_loader.sampler.set_epoch(epoch)
 
         # optionally starts a queue
         if args.queue_length > 0 and epoch >= args.epoch_queue_starts and queue is None:
@@ -241,8 +241,8 @@ def main():
                 "state_dict": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
             }
-            if args.use_fp16:
-                save_dict["amp"] = apex.amp.state_dict()
+            # if args.use_fp16:
+            #     save_dict["amp"] = apex.amp.state_dict()
             torch.save(
                 save_dict,
                 os.path.join(args.dump_path, "checkpoint.pth.tar"),
@@ -276,9 +276,11 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
 
         # normalize the prototypes
         with torch.no_grad():
-            w = model.module.prototypes.weight.data.clone()
+            # w = model.module.prototypes.weight.data.clone()
+            w = model.prototypes.weight.data.clone()
             w = nn.functional.normalize(w, dim=1, p=2)
-            model.module.prototypes.weight.copy_(w)
+            # model.module.prototypes.weight.copy_(w)
+            model.prototypes.weight.copy_(w)
 
         # ============ multi-res forward passes ... ============
         embedding, output = model(inputs)
@@ -316,11 +318,11 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
 
         # ============ backward and optim step ... ============
         optimizer.zero_grad()
-        if args.use_fp16:
-            with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            loss.backward()
+        # if args.use_fp16:
+        #     with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
+        #         scaled_loss.backward()
+        # else:
+        loss.backward()
         # cancel gradients for the prototypes
         if iteration < args.freeze_prototypes_niters:
             for name, p in model.named_parameters():
@@ -344,7 +346,8 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
                     batch_time=batch_time,
                     data_time=data_time,
                     loss=losses,
-                    lr=optimizer.optim.param_groups[0]["lr"],
+                    # lr=optimizer.optim.param_groups[0]["lr"],
+                    lr=optimizer.param_groups[0]["lr"],
                 )
             )
     return (epoch, losses.avg), queue
@@ -358,13 +361,13 @@ def distributed_sinkhorn(out):
 
     # make the matrix sums to 1
     sum_Q = torch.sum(Q)
-    dist.all_reduce(sum_Q)
+    # dist.all_reduce(sum_Q)
     Q /= sum_Q
 
     for it in range(args.sinkhorn_iterations):
         # normalize each row: total weight per prototype must be 1/K
         sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
-        dist.all_reduce(sum_of_rows)
+        # dist.all_reduce(sum_of_rows)
         Q /= sum_of_rows
         Q /= K
 
