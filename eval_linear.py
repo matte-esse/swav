@@ -91,7 +91,7 @@ parser.add_argument("--local_rank", default=0, type=int,
 def main():
     global args, best_acc
     args = parser.parse_args()
-    init_distributed_mode(args)
+    # init_distributed_mode(args)
     fix_random_seeds(args.seed)
     logger, training_stats = initialize_exp(
         args, "epoch", "loss", "prec1", "prec5", "loss_val", "prec1_val", "prec5_val"
@@ -115,10 +115,10 @@ def main():
         transforms.ToTensor(),
         tr_normalize,
     ])
-    sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    # sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        sampler=sampler,
+        # sampler=sampler,
         batch_size=args.batch_size,
         num_workers=args.workers,
         pin_memory=True,
@@ -141,16 +141,17 @@ def main():
     # model to gpu
     model = model.cuda()
     linear_classifier = linear_classifier.cuda()
-    linear_classifier = nn.parallel.DistributedDataParallel(
-        linear_classifier,
-        device_ids=[args.gpu_to_work_on],
-        find_unused_parameters=True,
-    )
+    # linear_classifier = nn.parallel.DistributedDataParallel(
+    #     linear_classifier,
+    #     device_ids=[args.gpu_to_work_on],
+    #     find_unused_parameters=True,
+    # )
     model.eval()
 
     # load weights
     if os.path.isfile(args.pretrained):
-        state_dict = torch.load(args.pretrained, map_location="cuda:" + str(args.gpu_to_work_on))
+        # state_dict = torch.load(args.pretrained, map_location="cuda:" + str(args.gpu_to_work_on))
+        state_dict = torch.load(args.pretrained)
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]
         # remove prefixe "module."
@@ -204,7 +205,7 @@ def main():
         logger.info("============ Starting epoch %i ... ============" % epoch)
 
         # set samplers
-        train_loader.sampler.set_epoch(epoch)
+        # train_loader.sampler.set_epoch(epoch)
 
         scores = train(model, linear_classifier, optimizer, train_loader, epoch)
         scores_val = validate_network(val_loader, model, linear_classifier)
