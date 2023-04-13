@@ -226,7 +226,7 @@ def restart_from_checkpoint(ckp_paths, run_variables=None, **kwargs):
 
     # open checkpoint file
     checkpoint = torch.load(
-        ckp_path 
+        ckp_path,
         map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count())
     )
 
