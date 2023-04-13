@@ -47,6 +47,12 @@ class SwAV_Args:
         wd=1e-6,
         warmup_epochs=10,
         start_warmup=0,
+
+        dist_url='env://',
+        world_size=1,
+        rank=0,
+        local_rank=0,
+
         arch="resnet50",
         hidden_mlp=2048,
         checkpoint_freq=25,
@@ -150,6 +156,11 @@ def init_distributed_mode(args):
         # read environment variables
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ["WORLD_SIZE"])
+    
+    # os.environ['RANK'] = str(args.rank) # FIXME: look this up
+    # os.environ['WORLD_SIZE'] = str(args.world_size)
+    # os.environ['MASTER_ADDR'] = str('localhost')
+    # os.environ['MASTER_PORT'] = str('8080')
 
     # prepare distributed
     dist.init_process_group(
