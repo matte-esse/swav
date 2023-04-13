@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
 import torch.optim
 
 from .src.utils import (
@@ -23,10 +24,16 @@ from .src.utils import (
     restart_from_checkpoint,
     fix_random_seeds,
     AverageMeter,
+    init_distributed_mode,
 )
 from .src import resnet50 as resnet_models
 
 logger = getLogger()
+
+os.environ['RANK'] = str(0) 
+os.environ['WORLD_SIZE'] = str(1)
+os.environ['MASTER_ADDR'] = str('localhost')
+os.environ['MASTER_PORT'] = str('8080')
 
 def run_swav(
     args,
@@ -41,9 +48,12 @@ def run_swav(
         train_loader (torch.utils.data.DataLoader): Data loader for training the
             SwAV model.
     """
+    init_distributed_mode(args)
     fix_random_seeds(args.seed)
     logger, training_stats = initialize_exp(args, "epoch", "loss")
-
+    
+    # FIXME: distributed sampler?
+    # sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     # build model
     model = resnet_models.__dict__[args.arch](
         normalize=True,
@@ -54,8 +64,10 @@ def run_swav(
     # synchronize batch norm layers
     if args.sync_bn == "pytorch":
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    # copy model to GPU
     model = model.cuda()
-    logger.info(model)
+    if args.rank == 0:
+        logger.info(model)
     logger.info("Building model done.")
 
     # build optimizer
@@ -73,6 +85,12 @@ def run_swav(
     lr_schedule = np.concatenate((warmup_lr_schedule, cosine_lr_schedule))
     logger.info("Building optimizer done.")
 
+    # wrap model
+    model = nn.parallel.DistributedDataParallel(
+        model,
+        device_ids=[args.gpu_to_work_on]
+    )
+
     # optionally resume from a checkpoint
     to_restore = {"epoch": 0}
     restart_from_checkpoint(
@@ -85,11 +103,11 @@ def run_swav(
 
     # build the queue
     queue = None
-    queue_path = os.path.join(args.dump_path, "queue" + ".pth")
+    queue_path = os.path.join(args.dump_path, "queue" + str(args.rank) + ".pth")
     if os.path.isfile(queue_path):
         queue = torch.load(queue_path)["queue"]
     # the queue needs to be divisible by the batch size
-    args.queue_length -= args.queue_length % (args.batch_size)
+    args.queue_length -= args.queue_length % (args.batch_size * args.world_size)
 
     cudnn.benchmark = True
 
@@ -102,7 +120,7 @@ def run_swav(
         if args.queue_length > 0 and epoch >= args.epoch_queue_starts and queue is None:
             queue = torch.zeros(
                 len(args.crops_for_assign),
-                args.queue_length,
+                args.queue_length // args.world_size,
                 args.feat_dim,
             ).cuda()
 
@@ -114,20 +132,21 @@ def run_swav(
         training_stats.update(scores)
 
         # save checkpoints
-        save_dict = {
-            "epoch": epoch + 1,
-            "state_dict": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-        }
-        torch.save(
-            save_dict,
-            os.path.join(args.dump_path, "checkpoint.pth.tar"),
-        )
-        if epoch % args.checkpoint_freq == 0 or epoch == args.epochs - 1:
-            shutil.copyfile(
+        if args.rank == 0:
+            save_dict = {
+                "epoch": epoch + 1,
+                "state_dict": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+            }
+            torch.save(
+                save_dict,
                 os.path.join(args.dump_path, "checkpoint.pth.tar"),
-                os.path.join(args.dump_checkpoints, "ckp-" + str(epoch) + ".pth"),
             )
+            if epoch % args.checkpoint_freq == 0 or epoch == args.epochs - 1:
+                shutil.copyfile(
+                    os.path.join(args.dump_path, "checkpoint.pth.tar"),
+                    os.path.join(args.dump_checkpoints, "ckp-" + str(epoch) + ".pth"),
+                )
         if queue is not None:
             torch.save({"queue": queue}, queue_path)
 
@@ -157,9 +176,9 @@ def train(
 
         # normalize the prototypes
         with torch.no_grad():
-            w = model.prototypes.weight.data.clone()
+            w = model.module.prototypes.weight.data.clone()
             w = nn.functional.normalize(w, dim=1, p=2)
-            model.prototypes.weight.copy_(w)
+            model.module.prototypes.weight.copy_(w)
 
         # ============ multi-res forward passes ... ============
         embedding, output = model(inputs)
@@ -239,12 +258,13 @@ def distributed_sinkhorn(out, epsilon, sinkhorn_iterations):
 
     # make the matrix sums to 1
     sum_Q = torch.sum(Q)
-    # dist.all_reduce(sum_Q)
+    dist.all_reduce(sum_Q)
     Q /= sum_Q
 
     for it in range(sinkhorn_iterations):
         # normalize each row: total weight per prototype must be 1/K
         sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
+        dist.all_reduce(sum_of_rows)
         Q /= sum_of_rows
         Q /= K
 
@@ -257,4 +277,5 @@ def distributed_sinkhorn(out, epsilon, sinkhorn_iterations):
 
 
 if __name__ == "__main__":
+    # TODO: parse args and run
     run_swav()
