@@ -156,11 +156,6 @@ def init_distributed_mode(args):
         # read environment variables
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ["WORLD_SIZE"])
-    
-    # os.environ['RANK'] = str(args.rank) # FIXME: look this up
-    # os.environ['WORLD_SIZE'] = str(args.world_size)
-    # os.environ['MASTER_ADDR'] = str('localhost')
-    # os.environ['MASTER_PORT'] = str('8080')
 
     # prepare distributed
     dist.init_process_group(
@@ -191,17 +186,17 @@ def initialize_exp(params, *args, dump_params=True):
 
     # create repo to store checkpoints
     params.dump_checkpoints = os.path.join(params.dump_path, "checkpoints")
-    if not os.path.isdir(params.dump_checkpoints):
+    if not params.rank and not os.path.isdir(params.dump_checkpoints):
         os.mkdir(params.dump_checkpoints)
 
     # create a panda object to log loss and acc
     training_stats = PD_Stats(
-        os.path.join(params.dump_path, "stats" + ".pkl"), args
+        os.path.join(params.dump_path, "stats" + str(params.rank) + ".pkl"), args
     )
 
     # create a logger
     logger = create_logger(
-        os.path.join(params.dump_path, "train.log")
+        os.path.join(params.dump_path, "train.log"), rank=params.rank
     )
     logger.info("============ Initialized logger ============")
     logger.info(
@@ -232,7 +227,7 @@ def restart_from_checkpoint(ckp_paths, run_variables=None, **kwargs):
     # open checkpoint file
     checkpoint = torch.load(
         ckp_path 
-        # map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count())
+        map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count())
     )
 
     # key is what to look for in the checkpoint file

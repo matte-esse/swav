@@ -35,7 +35,7 @@ logger = getLogger()
 
 parser = argparse.ArgumentParser(description="Implementation of SwAV")
 
-os.environ['RANK'] = str(0) # FIXME: look this up
+os.environ['RANK'] = str(0) 
 os.environ['WORLD_SIZE'] = str(1)
 os.environ['MASTER_ADDR'] = str('localhost')
 os.environ['MASTER_PORT'] = str('8080')
