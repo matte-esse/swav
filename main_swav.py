@@ -19,8 +19,9 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim
-import apex
-from apex.parallel.LARC import LARC
+if "APEX" in os.environ:
+    import apex
+    from apex.parallel.LARC import LARC
 
 from src.utils import (
     bool_flag,
@@ -110,7 +111,7 @@ parser.add_argument("--workers", default=10, type=int,
                     help="number of data loading workers")
 parser.add_argument("--checkpoint_freq", type=int, default=25,
                     help="Save the model periodically")
-parser.add_argument("--use_fp16", type=bool_flag, default=True,
+parser.add_argument("--use_fp16", type=bool_flag, default=False,
                     help="whether to train with mixed precision or not")
 parser.add_argument("--sync_bn", type=str, default="pytorch", help="synchronize bn")
 parser.add_argument("--syncbn_process_group_size", type=int, default=8, help=""" see
@@ -174,7 +175,8 @@ def main():
         momentum=0.9,
         weight_decay=args.wd,
     )
-    optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
+    if "APEX" in os.environ:
+        optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
     warmup_lr_schedule = np.linspace(args.start_warmup, args.base_lr, len(train_loader) * args.warmup_epochs)
     iters = np.arange(len(train_loader) * (args.epochs - args.warmup_epochs))
     cosine_lr_schedule = np.array([args.final_lr + 0.5 * (args.base_lr - args.final_lr) * (1 + \
@@ -195,13 +197,21 @@ def main():
 
     # optionally resume from a checkpoint
     to_restore = {"epoch": 0}
-    restart_from_checkpoint(
-        os.path.join(args.dump_path, "checkpoint.pth.tar"),
-        run_variables=to_restore,
-        state_dict=model,
-        optimizer=optimizer,
-        amp=apex.amp,
-    )
+    if "APEX" in os.environ:
+        restart_from_checkpoint(
+            os.path.join(args.dump_path, "checkpoint.pth.tar"),
+            run_variables=to_restore,
+            state_dict=model,
+            optimizer=optimizer,
+            amp=apex.amp,
+        )
+    else:
+        restart_from_checkpoint(
+            os.path.join(args.dump_path, "checkpoint.pth.tar"),
+            run_variables=to_restore,
+            state_dict=model,
+            optimizer=optimizer
+        )
     start_epoch = to_restore["epoch"]
 
     # build the queue
@@ -332,6 +342,10 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
         losses.update(loss.item(), inputs[0].size(0))
         batch_time.update(time.time() - end)
         end = time.time()
+        if "APEX" in os.environ:
+            lr_logger = optimizer.optim.param_groups[0]["lr"]
+        else:
+            lr_logger = optimizer.param_groups[0]["lr"]
         if args.rank ==0 and it % 50 == 0:
             logger.info(
                 "Epoch: [{0}][{1}]\t"
@@ -344,7 +358,7 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
                     batch_time=batch_time,
                     data_time=data_time,
                     loss=losses,
-                    lr=optimizer.optim.param_groups[0]["lr"],
+                    lr=lr_logger
                 )
             )
     return (epoch, losses.avg), queue
@@ -377,4 +391,5 @@ def distributed_sinkhorn(out):
 
 
 if __name__ == "__main__":
+    os.environ['apex'] = 'true'
     main()

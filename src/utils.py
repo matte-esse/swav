@@ -23,6 +23,113 @@ TRUTHY_STRINGS = {"on", "true", "1"}
 
 logger = getLogger()
 
+class SwAV_Args:
+    def __init__(
+        self,
+        data_path="/path/to/imagenet",
+        nmb_crops=[2],
+        size_crops=[224],
+        min_scale_crops=[0.14],
+        max_scale_crops=[1],
+        crops_for_assign=[0, 1],
+        temperature=0.1,
+        epsilon=0.05,
+        sinkhorn_iterations=3,
+        feat_dim=128,
+        nmb_prototypes=3000,
+        queue_length=0,
+        epoch_queue_starts=15,
+        epochs=100,
+        batch_size=64,
+        base_lr=4.8,
+        final_lr=0,
+        freeze_prototypes_niters=313,
+        wd=1e-6,
+        warmup_epochs=10,
+        start_warmup=0,
+        dist_url='env://',
+        world_size=-1,
+        rank=0,
+        local_rank=0,
+        arch="resnet50",
+        hidden_mlp=2048,
+        checkpoint_freq=25,
+        use_fp16=False,
+        sync_bn="pytorch",
+        syncbn_process_group_size=8,
+        dump_path=".",
+        seed=31
+    ) -> None:
+        """SwAV arguments.
+
+        A class containing all the default - if not overwritten at initialization -
+        SwAV arguments.
+
+        Keyword Args:
+            data_path (str): Path to dataset repository.
+            nmb_crops (list): List of number of crops (example: [2, 6]).
+            size_crops (list): Crops resolutions (example: [224, 96]).
+            min_scale_crops (list): Argument in RandomResizedCrop (example: [0.14, 0.05]).
+            max_scale_crops (list): Argument in RandomResizedCrop (example: [1., 0.14]).
+            crops_for_assign (list): List of crops id used for computing assignments.
+            temperature (float): Temperature parameter in training loss.
+            epsilon (float): Regularization parameter for Sinkhorn-Knopp algorithm.
+            sinkhorn_iterations (int): Number of iterations in Sinkhorn-Knopp algorithm.
+            feat_dim (int): Feature dimension.
+            nmb_prototypes (int): Number of prototypes.
+            queue_length (int): Length of the queue (0 for no queue).
+            epoch_queue_starts (int): From this epoch, we start using a queue.
+            epochs (int): Number of total epochs to run.
+            # batch_size (int): Batch size per gpu, i.e. how many unique instances per gpu.
+            # bath_size has to be defined the the dataset_kwargs
+            base_lr (float): Base learning rate.
+            final_lr (float): Final learning rate.
+            freeze_prototypes_niters (int): Freeze the prototypes during this many iterations from the start.
+            wd (float): Weight decay.
+            warmup_epochs (int): Number of warmup epochs.
+            start_warmup (float): Initial warmup learning rate.
+            dist_url (str): url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html.
+            world_size (int): number of processes; it is set automatically and should not be passed as an argument.
+            rank (int): rank of this process; it is set automatically and should not be passed as an argument.
+            local_rank (int): this argument is not used and should be ignored.
+            arch (str): Convnet architecture.
+            hidden_mlp (int): Hidden layer dimension in projection head.
+            checkpoint_freq (int): Save the model periodically.
+            use_fp16 (bool): whether to train with mixed precision or not
+            sync_bn (str): Synchronize bn.
+            syncbn_process_group_size (int): see https://github.com/NVIDIA/apex/blob/master/apex/parallel/__init__.py#L58-L67
+            dump_path (str): Experiment dump path for checkpoints and log.
+            seed (int): Seed.
+        """
+        for argname, argval in dict(locals()).items():
+          setattr(self, argname, argval)
+        
+    def to_dict(self):
+        return {k:v for k,v in vars(self).items()
+                if k not in ('train_kwargs', 'self')}
+
+    @property
+    def train_kwargs(self):
+        return {
+            k: getattr(self, k)
+            for k in (
+                'crops_for_assign', 'nmb_crops', 'temperature', 
+                'freeze_prototypes_niters', 'epsilon', 'sinkhorn_iterations'
+            )
+        }
+
+def get_args(**kwargs):
+    """Configure a ``SwAV`` object for training SwAV.
+
+    Keyword args:
+        **kwargs: Please see the :class:`slideflow.swav.SwAV_Args` documentation
+            for information on available parameters.
+
+    Returns:
+        slideflow.swav.SwAV
+
+    """
+    return SwAV_Args(**kwargs)
 
 def bool_flag(s):
     """
@@ -54,7 +161,9 @@ def init_distributed_mode(args):
         # multi-GPU job (local or multi-node) - jobs started with torch.distributed.launch
         # read environment variables
         args.rank = int(os.environ["RANK"])
+        print(f'RANK: {args.rank}')
         args.world_size = int(os.environ["WORLD_SIZE"])
+        print(f'WORLD_SIZE: {args.world_size}')
 
     # prepare distributed
     dist.init_process_group(
