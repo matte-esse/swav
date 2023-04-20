@@ -53,6 +53,7 @@ class SwAV_Args:
         local_rank=0,
         arch="resnet50",
         hidden_mlp=2048,
+        workers=10,
         checkpoint_freq=25,
         use_fp16=False,
         sync_bn="pytorch",
@@ -94,6 +95,7 @@ class SwAV_Args:
             local_rank (int): this argument is not used and should be ignored.
             arch (str): Convnet architecture.
             hidden_mlp (int): Hidden layer dimension in projection head.
+            workers (int): number of data loading workers.
             checkpoint_freq (int): Save the model periodically.
             use_fp16 (bool): whether to train with mixed precision or not
             sync_bn (str): Synchronize bn.
