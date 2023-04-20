@@ -23,40 +23,64 @@ if "APEX" in os.environ:
     import apex
     from apex.parallel.LARC import LARC
 
-from src.utils import (
-    get_args,
-    bool_flag,
-    initialize_exp,
-    restart_from_checkpoint,
-    fix_random_seeds,
-    AverageMeter,
-    init_distributed_mode,
-)
-from src.multicropdataset import MultiCropDataset
-import src.resnet50 as resnet_models
+try:
+    from .src.utils import (
+        get_args,
+        bool_flag,
+        initialize_exp,
+        restart_from_checkpoint,
+        fix_random_seeds,
+        AverageMeter,
+        init_distributed_mode,
+    )
+    from .src.multicropdataset import MultiCropDataset
+    from .src import resnet50 as resnet_models
+except ImportError:
+    from src.utils import (
+        get_args,
+        bool_flag,
+        initialize_exp,
+        restart_from_checkpoint,
+        fix_random_seeds,
+        AverageMeter,
+        init_distributed_mode,
+    )
+    from src.multicropdataset import MultiCropDataset
+    from src import resnet50 as resnet_models
 
 logger = getLogger()
 
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '8080'
+if "MASTER_PORT" not in os.environ:
+    os.environ['MASTER_PORT'] = '8080'
 
 parser = argparse.ArgumentParser(description="Implementation of SwAV")
 
-def run_swav(args):
+def run_swav(args, train_dataset=None):
+    """
+    Train a SwAV model
+
+    Args:
+        args: SwAV arguments, as provided by
+            :func:`slideflow.swav.get_args()`.
+        train_loader (torch.utils.data.DataLoader): Data loader for training the
+            SwAV model.
+    """
     init_distributed_mode(args)
     fix_random_seeds(args.seed)
     logger, training_stats = initialize_exp(args, "epoch", "loss")
 
     # build data
-    train_dataset = MultiCropDataset(
-        args.data_path,
-        args.size_crops,
-        args.nmb_crops,
-        args.min_scale_crops,
-        args.max_scale_crops,
-    )
+    if train_dataset is None:
+        train_dataset = MultiCropDataset(
+            args.data_path,
+            args.size_crops,
+            args.nmb_crops,
+            args.min_scale_crops,
+            args.max_scale_crops,
+        )
     sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
