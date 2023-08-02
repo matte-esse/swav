@@ -58,7 +58,7 @@ if "MASTER_PORT" not in os.environ:
 
 parser = argparse.ArgumentParser(description="Implementation of SwAV")
 
-def run_swav(args, train_dataset=None):
+def run_swav(args, train_loader):
     """
     Train a SwAV model
 
@@ -73,24 +73,24 @@ def run_swav(args, train_dataset=None):
     logger, training_stats = initialize_exp(args, "epoch", "loss")
 
     # build data
-    if train_dataset is None:
-        train_dataset = MultiCropDataset(
-            args.data_path,
-            args.size_crops,
-            args.nmb_crops,
-            args.min_scale_crops,
-            args.max_scale_crops,
-        )
-    sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        sampler=sampler,
-        batch_size=args.batch_size,
-        num_workers=args.workers,
-        pin_memory=True,
-        drop_last=True
-    )
-    logger.info("Building data done with {} images loaded.".format(len(train_dataset)))
+    # if train_dataset is None:
+    #     train_dataset = MultiCropDataset(
+    #         args.data_path,
+    #         args.size_crops,
+    #         args.nmb_crops,
+    #         args.min_scale_crops,
+    #         args.max_scale_crops,
+    #     )
+    # sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    # train_loader = torch.utils.data.DataLoader(
+    #     train_dataset,
+    #     sampler=sampler,
+    #     batch_size=args.batch_size,
+    #     num_workers=args.workers,
+    #     pin_memory=True,
+    #     drop_last=True
+    # )
+    # logger.info("Building data done with {} images loaded.".format(len(train_dataset)))
 
     # build model
     model = resnet_models.__dict__[args.arch](
@@ -174,8 +174,8 @@ def run_swav(args, train_dataset=None):
         # train the network for one epoch
         logger.info("============ Starting epoch %i ... ============" % epoch)
 
-        # set sampler
-        train_loader.sampler.set_epoch(epoch)
+        # # set sampler
+        # train_loader.sampler.set_epoch(epoch)
 
         # optionally starts a queue
         if args.queue_length > 0 and epoch >= args.epoch_queue_starts and queue is None:
@@ -186,7 +186,7 @@ def run_swav(args, train_dataset=None):
             ).cuda()
 
         # train the network
-        scores, queue = train(train_loader, model, optimizer, epoch, lr_schedule, queue)
+        scores, queue = train(train_loader, model, optimizer, epoch, lr_schedule, queue, args.train_kwargs)
         training_stats.update(scores)
 
         # save checkpoints
@@ -211,7 +211,9 @@ def run_swav(args, train_dataset=None):
             torch.save({"queue": queue}, queue_path)
 
 
-def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
+def train(
+        train_loader, model, optimizer, epoch, lr_schedule, queue, train_kwargs
+    ):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -220,7 +222,13 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
     use_the_queue = False
 
     end = time.time()
-    for it, inputs in enumerate(train_loader):
+
+    dataset_stream = iter(train_loader)
+
+    # for it, inputs in enumerate(train_loader):
+    for it in range(len(train_loader)):
+        inputs = next(dataset_stream)[0]
+
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -242,7 +250,7 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
 
         # ============ swav loss ... ============
         loss = 0
-        for i, crop_id in enumerate(args.crops_for_assign):
+        for i, crop_id in enumerate(train_kwargs['crops_for_assign']):
             with torch.no_grad():
                 out = output[bs * crop_id: bs * (crop_id + 1)].detach()
 
@@ -259,25 +267,30 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
                     queue[i, :bs] = embedding[crop_id * bs: (crop_id + 1) * bs]
 
                 # get assignments
-                q = distributed_sinkhorn(out)[-bs:]
+                q = distributed_sinkhorn(
+                    out, 
+                    train_kwargs['world_size'],
+                    train_kwargs['epsilon'], 
+                    train_kwargs['sinkhorn_iterations']
+                )[-bs:]
 
             # cluster assignment prediction
             subloss = 0
-            for v in np.delete(np.arange(np.sum(args.nmb_crops)), crop_id):
-                x = output[bs * v: bs * (v + 1)] / args.temperature
+            for v in np.delete(np.arange(np.sum(train_kwargs['nmb_crops'])), crop_id):
+                x = output[bs * v: bs * (v + 1)] / train_kwargs['temperature']
                 subloss -= torch.mean(torch.sum(q * F.log_softmax(x, dim=1), dim=1))
-            loss += subloss / (np.sum(args.nmb_crops) - 1)
-        loss /= len(args.crops_for_assign)
+            loss += subloss / (np.sum(train_kwargs['nmb_crops']) - 1)
+        loss /= len(train_kwargs['crops_for_assign'])
 
         # ============ backward and optim step ... ============
         optimizer.zero_grad()
-        if args.use_fp16:
+        if train_kwargs['use_fp16']:
             with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
         else:
             loss.backward()
         # cancel gradients for the prototypes
-        if iteration < args.freeze_prototypes_niters:
+        if iteration < train_kwargs['freeze_prototypes_niters']:
             for name, p in model.named_parameters():
                 if "prototypes" in name:
                     p.grad = None
@@ -291,7 +304,7 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
             lr_logger = optimizer.optim.param_groups[0]["lr"]
         else:
             lr_logger = optimizer.param_groups[0]["lr"]
-        if args.rank ==0 and it % 50 == 0:
+        if train_kwargs['rank'] ==0 and it % 50 == 0:
             logger.info(
                 "Epoch: [{0}][{1}]\t"
                 "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
@@ -303,16 +316,16 @@ def train(train_loader, model, optimizer, epoch, lr_schedule, queue):
                     batch_time=batch_time,
                     data_time=data_time,
                     loss=losses,
-                    lr=lr_logger
+                    lr=optimizer.param_groups[0]["lr"] # FIXME: issue on github
                 )
             )
     return (epoch, losses.avg), queue
 
 
 @torch.no_grad()
-def distributed_sinkhorn(out):
-    Q = torch.exp(out / args.epsilon).t() # Q is K-by-B for consistency with notations from our paper
-    B = Q.shape[1] * args.world_size # number of samples to assign
+def distributed_sinkhorn(out, world_size, epsilon, sinkhorn_iterations):
+    Q = torch.exp(out / epsilon).t() # Q is K-by-B for consistency with notations from our paper
+    B = Q.shape[1] * world_size # number of samples to assign
     K = Q.shape[0] # how many prototypes
 
     # make the matrix sums to 1
@@ -320,7 +333,7 @@ def distributed_sinkhorn(out):
     dist.all_reduce(sum_Q)
     Q /= sum_Q
 
-    for it in range(args.sinkhorn_iterations):
+    for it in range(sinkhorn_iterations):
         # normalize each row: total weight per prototype must be 1/K
         sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
         dist.all_reduce(sum_of_rows)

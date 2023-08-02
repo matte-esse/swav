@@ -115,8 +115,9 @@ class SwAV_Args:
         return {
             k: getattr(self, k)
             for k in (
-                'crops_for_assign', 'nmb_crops', 'temperature', 
-                'freeze_prototypes_niters', 'epsilon', 'sinkhorn_iterations'
+                'crops_for_assign', 'nmb_crops', 'temperature', 'world_size',
+                'freeze_prototypes_niters', 'epsilon', 'sinkhorn_iterations',
+                'rank', 'use_fp16'
             )
         }
 
