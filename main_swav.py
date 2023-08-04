@@ -54,7 +54,9 @@ os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
 if "MASTER_PORT" not in os.environ:
-    os.environ['MASTER_PORT'] = '8080'
+    import random
+    os.environ['MASTER_PORT'] = str(random.randint(49152, 65535))
+    # os.environ['MASTER_PORT'] = '8080'
 
 parser = argparse.ArgumentParser(description="Implementation of SwAV")
 
