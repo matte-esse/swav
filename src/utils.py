@@ -58,7 +58,7 @@ class SwAV_Args:
         use_fp16=False,
         sync_bn="pytorch",
         syncbn_process_group_size=8,
-        dump_path=".",
+        dump_path=None,
         seed=31
     ) -> None:
         """SwAV arguments.
